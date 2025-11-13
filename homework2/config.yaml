@@ -1,0 +1,19 @@
+db:
+  uri: "mongodb://root:example@localhost:27017"
+  name: "crawler_db"
+
+gutenberg:
+  min_id: 1
+  max_id: 77034
+  docs_collection: "gutenberg_docs"
+  queue_collection: "gutenberg_queue"
+
+allrecipes:
+  seed: "https://www.allrecipes.com/"
+  allowed_regex: "^https?://www\\.allrecipes\\.com/"
+  docs_collection: "allrecipes_docs"
+  queue_collection: "allrecipes_queue"
+
+logic:
+  delay: 1
+  recheck_interval: 86400
