@@ -91,14 +91,28 @@ class MongoCrawler:
         logger.info(f'Gutenberg Worker {wid} stopped')
 
     async def seed_allrecipes(self):
+        seed = normalize_url(self.allrecipes_seed)
+
         try:
-            await self.allrecipes_queue.update_one(
-                {"url": self.allrecipes_seed},
-                {"$setOnInsert": {"added_ts": int(time.time()), "source": "allrecipes"}},
+            result = await self.allrecipes_queue.update_one(
+                {"url": seed},
+                {
+                    "$setOnInsert": {
+                        "added_ts": int(time.time()),
+                        "source": "allrecipes",
+                        "seed": True
+                    }
+                },
                 upsert=True
             )
-        except Exception:
-            pass
+
+            if result.upserted_id:
+                logger.info(f"Seed added to Allrecipes queue: {seed}")
+            else:
+                logger.info(f"Seed already exists in Allrecipes queue: {seed}")
+
+        except Exception as e:
+            logger.error(f"Failed to seed Allrecipes: {e}")
 
     async def crawl_allrecipes_worker(self, wid: int):
         logger.info(f'Allrecipes Worker {wid} started')
@@ -115,36 +129,67 @@ class MongoCrawler:
             await asyncio.sleep(self.delay)
         logger.info(f'Allrecipes Worker {wid} stopped')
 
-    async def fetch_and_store(self, url: str, source: str, docs_coll, recheck=False, enqueue_links=False, queue_coll=None):
+    async def fetch_and_store(
+            self,
+            url: str,
+            source: str,
+            docs_coll,
+            recheck: bool = False,
+            enqueue_links: bool = False,
+            queue_coll=None
+    ):
         logger.info(f'Fetching {url} (source={source}, recheck={recheck})')
+
+        # Загружаем уже сохранённый документ
         doc = await docs_coll.find_one({'url': url})
-        headers = {'User-Agent': self.cfg_logic.get('user_agent', 'SimpleCrawler/1.0')}
+
+        # Формируем заголовки
+        headers = {
+            'User-Agent': self.cfg_logic.get('user_agent', 'SimpleCrawler/1.0')
+        }
+
         if doc:
-            if 'etag' in doc and doc['etag']:
-                headers['If-None-Match'] = doc['etag']
-            if 'last_modified' in doc and doc['last_modified']:
-                headers['If-Modified-Since'] = doc['last_modified']
+            etag = doc.get('etag')
+            last_mod = doc.get('last_modified')
+            if etag:
+                headers['If-None-Match'] = etag
+            if last_mod:
+                headers['If-Modified-Since'] = last_mod
+
         try:
-            async with self.session.get(url, headers=headers, timeout=self.cfg_logic.get('timeout', 30)) as resp:
+            async with self.session.get(
+                    url,
+                    headers=headers,
+                    timeout=self.cfg_logic.get('timeout', 30)
+            ) as resp:
+
+                # 304 — unchanged
                 if resp.status == 304:
-                    await docs_coll.update_one({'url': url}, {'$set': {'last_checked': int(time.time())}})
+                    await docs_coll.update_one(
+                        {'url': url},
+                        {'$set': {'last_checked': int(time.time())}}
+                    )
                     return
+
                 if resp.status != 200:
                     logger.warning(f'Status {resp.status} for {url}')
                     return
+
                 body = await resp.read()
+                now_ts = int(time.time())
+
                 content_hash = sha256_hex(body)
                 etag = resp.headers.get('ETag')
                 last_mod = resp.headers.get('Last-Modified')
-                now_ts = int(time.time())
 
                 changed = True
                 if doc:
-                    if etag and doc.get('etag') and etag == doc.get('etag'):
+                    if etag and doc.get('etag') == etag:
                         changed = False
                     elif content_hash == doc.get('content_hash'):
                         changed = False
 
+                # Обновляем или создаём документ
                 if not doc or changed:
                     payload = {
                         'url': url,
@@ -156,16 +201,28 @@ class MongoCrawler:
                         'content_hash': content_hash,
                         'last_checked': now_ts,
                     }
-                    await docs_coll.update_one({'url': url}, {'$set': payload}, upsert=True)
+
+                    await docs_coll.update_one(
+                        {'url': url},
+                        {'$set': payload},
+                        upsert=True
+                    )
                     logger.info(f'Stored/updated {url} (changed={changed})')
+
                 else:
-                    await docs_coll.update_one({'url': url}, {'$set': {'last_checked': now_ts}})
+                    # Обновляем только время проверки
+                    await docs_coll.update_one(
+                        {'url': url},
+                        {'$set': {'last_checked': now_ts}}
+                    )
                     logger.info(f'Unchanged {url}, updated last_checked')
 
-                if enqueue_links and queue_coll:
+                if enqueue_links and queue_coll is not None:
                     await self.enqueue_links_from_body(url, body, queue_coll)
+
         except asyncio.TimeoutError:
             logger.warning(f'Timeout fetching {url}')
+
         except aiohttp.ClientError as e:
             logger.warning(f'Client error fetching {url}: {e}')
 
@@ -175,23 +232,30 @@ class MongoCrawler:
         parsed_base = urlparse(base_url)
         domain = parsed_base.netloc
         added = 0
+
         for h in hrefs:
-            if h.startswith('http'):
-                p = urlparse(h)
-                if p.netloc != domain:
-                    continue
-                norm = normalize_url(h)
+            if h.startswith('//'):
+                h = f'{parsed_base.scheme}:{h}'
             elif h.startswith('/'):
-                norm = normalize_url(f'{parsed_base.scheme}://{domain}{h}')
-            else:
-                norm = normalize_url(urljoin(base_url, h))
+                h = f'{parsed_base.scheme}://{domain}{h}'
+            elif not h.startswith('http'):
+                h = urljoin(base_url, h)
+
+            norm = normalize_url(h)
+
             if not self.allrecipes_allowed_regex.match(norm):
                 continue
+
             try:
-                await queue_coll.update_one({'url': norm}, {'$setOnInsert': {'added_ts': int(time.time()), 'source': 'allrecipes'}}, upsert=True)
+                await queue_coll.update_one(
+                    {'url': norm},
+                    {'$setOnInsert': {'added_ts': int(time.time()), 'source': 'allrecipes'}},
+                    upsert=True
+                )
                 added += 1
             except Exception:
                 pass
+
         logger.info(f'Enqueued {added} links from {base_url}')
 
     async def recheck_scheduler(self):

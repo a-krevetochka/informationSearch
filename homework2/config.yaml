@@ -10,9 +10,10 @@ gutenberg:
 
 allrecipes:
   seed: "https://www.allrecipes.com/"
-  allowed_regex: "^https?://www\\.allrecipes\\.com/"
+  allowed_regex: "^https://www\\.allrecipes\\.com/"
   docs_collection: "allrecipes_docs"
   queue_collection: "allrecipes_queue"
+
 
 logic:
   delay: 1
