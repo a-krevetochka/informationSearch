@@ -1,0 +1,97 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: mongo_crawler
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-example}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-crawler_db}
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  mongo-express:
+    image: mongo-express:1.0.2
+    container_name: mongo_express
+    restart: always
+    ports:
+      - "8081:8081"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER:-root}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD:-example}
+      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/
+      ME_CONFIG_BASICAUTH_USERNAME: ${ME_USER:-admin}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${ME_PASSWORD:-admin}
+
+  crawler:
+    build:
+      context: ./homework2
+      dockerfile: Dockerfile
+    container_name: crawler_app
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./logs/crawler:/app/logs
+    environment:
+      - MONGO_URI=mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/${MONGO_DB:-crawler_db}?authSource=admin
+      - PYTHONUNBUFFERED=1
+    command: >
+      sh -c "echo '⏳ Waiting for MongoDB...' &&
+             until python -c 'import asyncio; import motor.motor_asyncio; import os; uri = os.getenv(\"MONGO_URI\"); asyncio.run(motor.motor_asyncio.AsyncIOMotorClient(uri).server_info())' 2>/dev/null; do sleep 2; done &&
+             echo '✅ MongoDB ready, starting crawler...' &&
+             python crawler.py config.yaml"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  search-server:
+    build:
+      context: ./homework3
+      dockerfile: Dockerfile
+    container_name: search_server
+    restart: unless-stopped
+    ports:
+      - "18080:18080"
+    depends_on:
+      - mongo
+      - crawler
+    volumes:
+      - ./logs/search:/app/logs
+    environment:
+      - MONGO_URI=mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-example}@mongo:27017/${MONGO_DB:-crawler_db}?authSource=admin
+    command: >
+      sh -c "echo '⏳ Waiting for services...' &&
+             sleep 20 &&
+             echo '🚀 Starting search server...' &&
+             ./search_server"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+volumes:
+  mongo_data:
+
+networks:
+  default:
+    name: crawler-network
+    driver: bridge

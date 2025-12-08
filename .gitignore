@@ -1,0 +1,33 @@
+/homework2/mongo_data/
+/homework3/cmake-build-debug/
+/homework3/cmake-build-debug-visual-studio/
+vcpkg/
+# vcpkg
+/vcpkg/
+vcpkg_installed/
+
+# Сборки CMake
+build/
+out/
+cmake-build-*/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# Скомпилированные файлы
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+*.o
+*.obj
+
+# Кэш IDE
+.vscode/
+.idea/
+*.swp
+*.swo

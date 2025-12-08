@@ -8,11 +8,12 @@ gutenberg:
   docs_collection: "gutenberg_docs"
   queue_collection: "gutenberg_queue"
 
-allrecipes:
-  seed: "https://www.allrecipes.com/"
-  allowed_regex: "^https://www\\.allrecipes\\.com/"
-  docs_collection: "allrecipes_docs"
-  queue_collection: "allrecipes_queue"
+standardebooks:
+  docs_collection: standardebooks_docs
+  queue_collection: standardebooks_queue
+  seed: "https://standardebooks.org/"
+  allowed_regex: r'^https://standardebooks\.org/.*text/single-page$'
+
 
 
 logic:
